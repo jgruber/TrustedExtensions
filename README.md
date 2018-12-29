@@ -27,12 +27,21 @@ This extension extends the iControl REST URI namespace at:
 
 `/mgmt/shared/TrustedExtensions`
 
-There are two controlling parameters which govern the behavior of this extension:
+There are three controlling parameters which govern the behavior of this extension:
 
 | Parameter | Value |
 | --------- | ------ |
 |`targetHost`| The trusted device host or if not supplied the local device
+|`targetUUID`| The trusted device UUID or if not supplied the local device
 |`url` | The URL to download the rpm file of the iControlLX extension
+
+You can supply `targetHost` or `targetUUID`. If you supply `targetUUID` the `targetHost` and `targetPort` will be resolved for you.
+
+In addition you can specify the `targetUUID` as a path parameter to keep the user experience the same as the TrustProxy extension.
+
+`/mgmt/shared/TrustedExtensions/7390b3b8-7682-4554-83e5-764e4f26703c`
+
+If supplied as a path variable, the `targetUUD` does not need to send as a query variable or part of the `POST` body.
 
 For `GET` and `DELETE` methods, these parameters can be populated through query parameters. For `POST` and `PUT` requests, these parameters can be issued in the request body as a JSON object, or they can be supplied as query parameters.
 
@@ -75,7 +84,78 @@ Response
 ]
 ```
 
-If no  `targetHost` query parameter is supplied, the request is placed against the device with this extension installed (`localhost`).
+`GET /mgmt/shared/TrustedExtensions?targetUUID=7390b3b8-7682-4554-83e5-764e4f26703c`
+
+Response
+
+```
+[
+    {
+        "name": "f5-declarative-onboarding",
+        "version": "1.1.0",
+        "release": "2",
+        "arch": "noarch",
+        "packageName": "f5-declarative-onboarding-1.1.0-2.noarch",
+        "tags": [
+            "PLUGIN"
+        ],
+        "rpmFile": "f5-declarative-onboarding-1.1.0-2.noarch.rpm",
+        "downloadUrl": "https://172.13.1.107:443/tmp/f5-declarative-onboarding-1.1.0-2.noarch.rpm",
+        "state": "AVAILABLE"
+    },
+    {
+        "name": "f5-appsvcs",
+        "version": "3.7.0",
+        "release": "7",
+        "arch": "noarch",
+        "packageName": "f5-appsvcs-3.7.0-7.noarch",
+        "tags": [
+            "IAPP"
+        ],
+        "rpmFile": "f5-appsvcs-3.7.0-7.noarch.rpm",
+        "downloadUrl": "https://172.13.1.107:443/tmp/f5-appsvcs-3.7.0-7.noarch.rpm",
+        "state": "AVAILABLE"
+    }
+]
+```
+
+`GET /mgmt/shared/TrustedExtensions/390b3b8-7682-4554-83e5-764e4f26703c`
+
+Response
+
+```
+[
+    {
+        "name": "f5-declarative-onboarding",
+        "version": "1.1.0",
+        "release": "2",
+        "arch": "noarch",
+        "packageName": "f5-declarative-onboarding-1.1.0-2.noarch",
+        "tags": [
+            "PLUGIN"
+        ],
+        "rpmFile": "f5-declarative-onboarding-1.1.0-2.noarch.rpm",
+        "downloadUrl": "https://172.13.1.107:443/tmp/f5-declarative-onboarding-1.1.0-2.noarch.rpm",
+        "state": "AVAILABLE"
+    },
+    {
+        "name": "f5-appsvcs",
+        "version": "3.7.0",
+        "release": "7",
+        "arch": "noarch",
+        "packageName": "f5-appsvcs-3.7.0-7.noarch",
+        "tags": [
+            "IAPP"
+        ],
+        "rpmFile": "f5-appsvcs-3.7.0-7.noarch.rpm",
+        "downloadUrl": "https://172.13.1.107:443/tmp/f5-appsvcs-3.7.0-7.noarch.rpm",
+        "state": "AVAILABLE"
+    }
+]
+```
+
+
+If neither the  `targetHost` nor `targetUUID` parameter are supplied, the request is placed against the device with this extension installed (`localhost`).
 
 `GET /mgmt/shared/TrustedExtensions`
 
@@ -138,7 +218,7 @@ All of these steps are performed by this iControlLX extension asynchronously. Th
 
 If an error happens anywhere in the process the `state` is transitioned to `ERROR`. Details on the cause of the error can be found in `/var/log/restjavad.0.log` and `/var/log/restnoded/restnoded.log` log files. If an error occurs, fix the problem, and then reissue the installation request.
 
-The `POST` method can take the `targetHost` and `url` parameters as either query parameters:
+The `POST` method can take the `targetHost`, `targetUUID`, and `url` parameters as either query parameters:
 
 `POST /mgmt/shared/TrustedExtensions?targetHost=172.13.1.107&url=url=https://github.com/F5Networks/f5-appsvcs-extension/releases/download/v3.7.0/f5-appsvcs-3.7.0-7.noarch.rpm`
 
@@ -173,6 +253,35 @@ Request
 ```
 {
     "targetHost": "172.13.1.107"
+    "url": "https://github.com/F5Networks/f5-appsvcs-extension/releases/download/v3.7.0/f5-appsvcs-3.7.0-7.noarch.rpm"
+}
+```
+
+
+Response
+
+```
+{
+    "rpmFile": "f5-appsvcs-3.7.0-7.noarch.rpm",
+    "downloadUrl": "https://github.com/F5Networks/f5-appsvcs-extension/releases/download/v3.7.0/f5-appsvcs-3.7.0-7.noarch.rpm",
+    "state": "DOWNLOADING",
+    "name": "",
+    "version": "",
+    "release": "",
+    "arch": "",
+    "packageName": "",
+    "tags": []
+}
+```
+
+As with the `GET` requests, `targetUUID` can be specified as a path parameter.
+
+`POST /mgmt/shared/TrustedExtensions/7390b3b8-7682-4554-83e5-764e4f26703c`
+
+Request
+
+```
+{
     "url": "https://github.com/F5Networks/f5-appsvcs-extension/releases/download/v3.7.0/f5-appsvcs-3.7.0-7.noarch.rpm"
 }
 ```

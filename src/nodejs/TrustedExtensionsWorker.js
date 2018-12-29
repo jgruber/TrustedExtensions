@@ -12,16 +12,11 @@ const FINISHED = 'FINISHED';
 const FAILED = 'FAILED';
 const UNDISCOVERED = 'UNDISCOVERED';
 const VALIDDOWNLOADPROTOCOLS = ['file:', 'http:', 'https:'];
+const DEVICEGROUP_PREFIX = 'TrustProxy_';
 
-const downloadDirectory = '/tmp';
+const downloadDirectory = '/var/tmp';
 const deviceGroupsUrl = 'http://localhost:8100/mgmt/shared/resolver/device-groups';
 const localauth = 'Basic ' + new Buffer('admin:').toString('base64');
-
-let downloadUrl;
-let rpmFile;
-let targetHost = 'localhost';
-let targetPort = '443';
-let name;
 
 let inFlight = {};
 
@@ -62,6 +57,7 @@ if (!Array.prototype.includes) {
 class TrustedExtensionsWorker {
     constructor() {
         this.WORKER_URI_PATH = "shared/TrustedExtensions";
+        this.isPassThrough = true;
         this.isPublic = true;
     }
 
@@ -71,30 +67,26 @@ class TrustedExtensionsWorker {
      * @param {RestOperation} restOperation
      */
     onGet(restOperation) {
-        const uri = restOperation.getUri();
-        const query = uri.query;
+        const paths = restOperation.uri.pathname.split('/');
+        const query = restOperation.getUri().query;
 
-        targetHost = query.targetHost;
-        targetPort = query.targetPort;
+        let targetDevice = null;
 
-        // default behavior
-        if (!targetHost) {
-            targetHost = 'localhost';
-        }
-        if (targetHost == 'localhost') {
-            targetPort = 8100;
-        }
-        if (!targetPort) {
-            targetPort = 443;
+        if (query.targetHost) {
+            targetDevice = query.targetHost;
+        } else if (query.targetUUID) {
+            targetDevice = query.targetUUID;
+        } else if (paths.length > 3) {
+            targetDevice = paths[3];
         }
 
-        this.validateTarget()
-            .then(() => {
-                this.getExtensions()
+        this.validateTarget(targetDevice)
+            .then((target) => {
+                this.getExtensions(target.targetHost, target.targetPort)
                     .then((extensions) => {
-                        if (name) {
+                        if (query.name) {
                             extensions.map((extension) => {
-                                if (extension.name == name) {
+                                if (extension.name.startsWith(query.name)) {
                                     restOperation.statusCode = 200;
                                     restOperation.setContentType('application/json');
                                     restOperation.body = extension;
@@ -102,7 +94,7 @@ class TrustedExtensionsWorker {
                                     return;
                                 }
                             });
-                            const err = new Error(`no extension with name ${name} found.`);
+                            const err = new Error(`no extension with name starting with ${query.name} found.`);
                             err.httpStatusCode = 404;
                             restOperation.fail(err);
                         } else {
@@ -118,7 +110,7 @@ class TrustedExtensionsWorker {
                     });
             })
             .catch((err) => {
-                err.httpStatusCode = 400;
+                err.httpStatusCode = 404;
                 restOperation.fail(err);
             });
 
@@ -129,19 +121,26 @@ class TrustedExtensionsWorker {
      * @param {RestOperation} restOperation
      */
     onPost(restOperation) {
-        const uri = restOperation.getUri();
-        const query = uri.query;
+        const paths = restOperation.uri.pathname.split('/');
+        const query = restOperation.getUri().query;
 
-        targetHost = query.targetHost;
-        targetPort = query.targetPort;
-        downloadUrl = query.url;
+        let targetDevice = null;
 
+        if (query.targetHost) {
+            targetDevice = query.targetHost;
+        } else if (query.targetUUID) {
+            targetDevice = query.targetUUID;
+        } else if (paths.length > 3) {
+            targetDevice = paths[3];
+        }
+
+        let downloadUrl = query.url;
         const createBody = restOperation.getBody();
         if (createBody.hasOwnProperty('targetHost')) {
-            targetHost = createBody.targetHost;
+            targetDevice = createBody.targetHost;
         }
-        if (createBody.hasOwnProperty('targetPort')) {
-            targetPort = createBody.targetPort;
+        if (createBody.hasOwnProperty('targetUUID')) {
+            targetDevice = createBody.targetUUID;
         }
         if (createBody.hasOwnProperty('url')) {
             downloadUrl = createBody.url;
@@ -153,32 +152,19 @@ class TrustedExtensionsWorker {
             restOperation.fail(err);
         }
 
-        // default behavior
-        if (!targetHost) {
-            targetHost = 'localhost';
-        }
-        if (targetHost == 'localhost') {
-            targetPort = 8100;
-        }
-        if (!targetPort) {
-            targetPort = 443;
-        }
-
-        rpmFile = path.basename(downloadUrl);
-
-        const inFlightIndex = `${targetHost}:${targetPort}:${rpmFile}`;
-        if (Object.keys(inFlight).includes(inFlightIndex)) {
-            const err = Error(`package with rpmFile ${rpmFile} is already installing with state ${inFlight[inFlightIndex].state} on target ${targetHost}:${targetPort}`);
-            err.httpStatusCode = 500;
-            restOperation.fail(err);
-            return;
-        }
-        this.validateTarget()
-            .then(() => {
-                this.getPackageName()
+        this.validateTarget(targetDevice)
+            .then((target) => {
+                const rpmFile = path.basename(downloadUrl);
+                const inFlightIndex = `${target.targetHost}:${target.targetPort}:${rpmFile}`;
+                if (Object.keys(inFlight).includes(inFlightIndex)) {
+                    const err = Error(`package with rpmFile ${rpmFile} is already installing with state ${inFlight[inFlightIndex].state} on target ${target.targetHost}:${target.targetPort}`);
+                    err.httpStatusCode = 500;
+                    restOperation.fail(err);
+                } else {
+                this.getPackageName(target.targetHost, target.targetPort, rpmFile)
                     .then((packageName) => {
                         if (packageName) {
-                            const err = new Error(`package with rpmFile ${rpmFile} is already installed on target ${targetHost}:${targetPort}`);
+                            const err = new Error(`package with rpmFile ${rpmFile} is already installed on target ${target.targetHost}:${target.targetPort}`);
                             err.httpStatusCode = 409;
                             restOperation.fail(err);
                         } else {
@@ -194,12 +180,12 @@ class TrustedExtensionsWorker {
                                 tags: []
                             };
                             inFlight[inFlightIndex] = returnExtension;
-                            this.installExtensionToTarget(targetHost, targetPort, downloadUrl, rpmFile)
+                            this.installExtensionToTarget(target.targetHost, target.targetPort, downloadUrl, rpmFile)
                                 .then((success) => {
                                     if (success) {
                                         delete inFlight[inFlightIndex];
                                     } else {
-                                        const err = new Error(`package with rpmFile ${rpmFile} was not installed on target ${targetHost}:${targetPort}`);
+                                        const err = new Error(`package with rpmFile ${rpmFile} was not installed on target ${target.targetHost}:${target.targetPort}`);
                                         returnExtension = inFlight[inFlightIndex];
                                         returnExtension.state = 'ERROR';
                                         returnExtension.tags.push('err: ' + err.message);
@@ -220,6 +206,7 @@ class TrustedExtensionsWorker {
                         err.httpStatusCode = 400;
                         restOperation.fail(err);
                     });
+                }
             })
             .catch((err) => {
                 err.httpStatusCode = 400;
@@ -233,19 +220,26 @@ class TrustedExtensionsWorker {
      * @param {RestOperation} restOperation
      */
     onPut(restOperation) {
-        const uri = restOperation.getUri();
-        const query = uri.query;
+        const paths = restOperation.uri.pathname.split('/');
+        const query = restOperation.getUri().query;
 
-        targetHost = query.targetHost;
-        targetPort = query.targetPort;
-        downloadUrl = query.url;
+        let targetDevice = null;
+
+        if (query.targetHost) {
+            targetDevice = query.targetHost;
+        } else if (query.targetUUID) {
+            targetDevice = query.targetUUID;
+        } else if (paths.length > 3) {
+            targetDevice = paths[3];
+        }
+        let downloadUrl = query.url;
 
         const createBody = restOperation.getBody();
         if (createBody.hasOwnProperty('targetHost')) {
-            targetHost = createBody.targetHost;
+            targetDevice = createBody.targetHost;
         }
-        if (createBody.hasOwnProperty('targetPort')) {
-            targetPort = createBody.targetPort;
+        if (createBody.hasOwnProperty('targetUUID')) {
+            targetDevice = createBody.targetUUID;
         }
         if (createBody.hasOwnProperty('url')) {
             downloadUrl = createBody.url;
@@ -257,27 +251,14 @@ class TrustedExtensionsWorker {
             restOperation.fail(err);
         }
 
-        // default behavior
-        if (!targetHost) {
-            targetHost = 'localhost';
-        }
-        if (targetHost == 'localhost') {
-            targetPort = 8100;
-        }
-        if (!targetPort) {
-            targetPort = 443;
-        }
-
-        rpmFile = path.basename(downloadUrl);
-
-        const inFlightIndex = `${targetHost}:${targetPort}:${rpmFile}`;
-
-        this.validateTarget()
-            .then(() => {
-                this.getPackageName()
+        this.validateTarget(targetDevice)
+            .then((target) => {
+                const rpmFile = path.basename(downloadUrl);
+                const inFlightIndex = `${target.targetHost}:${target.targetPort}:${rpmFile}`;
+                this.getPackageName(target.targetHost, target.targetPort, rpmFile)
                     .then((packageName) => {
                         if (packageName) {
-                            this.uninstallExtension(packageName)
+                            this.uninstallExtension(target.targetHost, target.targetPort, packageName)
                                 .then((success) => {
                                     if (success) {
                                         let returnExtension = {
@@ -292,12 +273,12 @@ class TrustedExtensionsWorker {
                                             tags: []
                                         };
                                         inFlight[inFlightIndex] = returnExtension;
-                                        this.installExtensionToTarget(targetHost, targetPort, downloadUrl, rpmFile)
+                                        this.installExtensionToTarget(target.targetHost, target.targetPort, downloadUrl, rpmFile)
                                             .then((success) => {
                                                 if (success) {
                                                     delete inFlight[inFlightIndex];
                                                 } else {
-                                                    const err = new Error(`package with rpmFile ${rpmFile} was not installed on target ${targetHost}:${targetPort}`);
+                                                    const err = new Error(`package with rpmFile ${rpmFile} was not installed on target ${target.targetHost}:${target.targetPort}`);
                                                     returnExtension = inFlight[inFlightIndex];
                                                     returnExtension.state = 'ERROR';
                                                     returnExtension.tags.push('err: ' + err.message);
@@ -313,13 +294,13 @@ class TrustedExtensionsWorker {
                                         restOperation.body = returnExtension;
                                         this.completeRestOperation(restOperation);
                                     } else {
-                                        const err = new Error(`package in ${rpmFile} could not be uninstalled to update on target ${targetHost}:${targetPort}`);
+                                        const err = new Error(`package in ${rpmFile} could not be uninstalled to update on target ${target.targetHost}:${target.targetPort}`);
                                         err.httpStatusCode = 500;
                                         restOperation.fail(err);
                                     }
                                 })
                                 .catch((err) => {
-                                    const error = new Error(`package in ${rpmFile} could not be uninstalled to update on target ${targetHost}:${targetPort} - ${err.message}`);
+                                    const error = new Error(`package in ${rpmFile} could not be uninstalled to update on target ${target.targetHost}:${target.targetPort} - ${err.message}`);
                                     error.httpStatusCode = 500;
                                     restOperation.fail(error);
                                 });
@@ -336,12 +317,12 @@ class TrustedExtensionsWorker {
                                 tags: []
                             };
                             inFlight[inFlightIndex] = returnExtension;
-                            this.installExtensionToTarget(targetHost, targetPort, downloadUrl, rpmFile)
+                            this.installExtensionToTarget(target.targetHost, target.targetPort, downloadUrl, rpmFile)
                                 .then((success) => {
                                     if (success) {
                                         delete inFlight[inFlightIndex];
                                     } else {
-                                        const err = new Error(`package with rpmFile ${rpmFile} was not installed on target ${targetHost}:${targetPort}`);
+                                        const err = new Error(`package with rpmFile ${rpmFile} was not installed on target ${target.targetHost}:${target.targetPort}`);
                                         returnExtension = inFlight[inFlightIndex];
                                         returnExtension.state = 'ERROR';
                                         returnExtension.tags.push('err: ' + err.message);
@@ -374,74 +355,65 @@ class TrustedExtensionsWorker {
      * @param {RestOperation} restOperation
      */
     onDelete(restOperation) {
-        const uri = restOperation.getUri();
-        const query = uri.query;
+        const paths = restOperation.uri.pathname.split('/');
+        const query = restOperation.getUri().query;
 
-        targetHost = query.targetHost;
-        targetPort = query.targetPort;
-        downloadUrl = query.url;
+        let targetDevice = null;
 
+        if (query.targetHost) {
+            targetDevice = query.targetHost;
+        } else if (query.targetUUID) {
+            targetDevice = query.targetUUID;
+        } else if (paths.length > 3) {
+            targetDevice = paths[3];
+        }
+        let downloadUrl = query.url;
         if (!downloadUrl) {
             const err = new Error('a download URL must be defined to uninstall a package');
             err.httpStatusCode = 400;
             restOperation.fail(err);
         }
 
-        // default behavior
-        if (!targetHost) {
-            targetHost = 'localhost';
-        }
-        if (targetHost == 'localhost') {
-            targetPort = 8100;
-        }
-        if (!targetPort) {
-            targetPort = 443;
-        }
-
-        rpmFile = path.basename(downloadUrl);
-
-        const inFlightIndex = `${targetHost}:${targetPort}:${rpmFile}`;
-
-        let deletedInFlight = false;
-
-        if (Object.keys(inFlight).includes(inFlightIndex)) {
-            delete inFlight[inFlightIndex];
-            deletedInFlight = true;
-        }
-
-        this.validateTarget()
-            .then(() => {
-                this.getPackageName()
+        this.validateTarget(targetDevice)
+            .then((target) => {
+                const rpmFile = path.basename(downloadUrl);
+                const inFlightIndex = `${target.targetHost}:${target.targetPort}:${rpmFile}`;
+                let deletedInFlight = false;
+                if (Object.keys(inFlight).includes(inFlightIndex)) {
+                    delete inFlight[inFlightIndex];
+                    deletedInFlight = true;
+                }
+                this.getPackageName(target.targetHost, target.targetPort, rpmFile)
                     .then((packageName) => {
                         if (packageName) {
-                            this.uninstallExtension(packageName)
+                            this.uninstallExtension(target.targetHost, target.targetPort, packageName)
                                 .then((success) => {
                                     if (success) {
                                         restOperation.statusCode = 200;
                                         restOperation.body = {
-                                            msg: `package in rpmFile ${rpmFile} uninstalled on target ${targetHost}:${targetPort}`
+                                            msg: `package in rpmFile ${rpmFile} uninstalled on target ${target.targetHost}:${target.targetPort}`
                                         };
                                         this.completeRestOperation(restOperation);
                                     } else {
-                                        const err = new Error(`package in ${rpmFile} could not be uninstalled on target ${targetHost}:${targetPort}`);
+                                        const err = new Error(`package in ${rpmFile} could not be uninstalled on target ${target.targetHost}:${target.targetPort}`);
                                         err.httpStatusCode = 500;
                                         restOperation.fail(err);
                                     }
                                 })
                                 .catch((err) => {
-                                    const error = new Error(`package in ${rpmFile} could not be uninstalled on target ${targetHost}:${targetPort} - ${err.message}`);
+                                    const error = new Error(`package in ${rpmFile} could not be uninstalled on target ${target.targetHost}:${target.targetPort} - ${err.message}`);
                                     error.httpStatusCode = 500;
                                     restOperation.fail(error);
                                 });
                         } else {
                             if (!deletedInFlight) {
-                                const err = new Error(`package in ${rpmFile} not installed on target ${targetHost}:${targetPort}`);
+                                const err = new Error(`package in ${rpmFile} not installed on target ${target.targetHost}:${target.targetPort}`);
                                 err.httpStatusCode = 404;
                                 restOperation.fail(err);
                             } else {
                                 restOperation.statusCode = 200;
                                 restOperation.body = {
-                                    msg: `package in rpmFile ${rpmFile} uninstalled on target ${targetHost}:${targetPort}`
+                                    msg: `package in rpmFile ${rpmFile} uninstalled on target ${target.targetHost}:${target.targetPort}`
                                 };
                                 this.completeRestOperation(restOperation);
                             }
@@ -458,18 +430,18 @@ class TrustedExtensionsWorker {
             });
     }
 
-    getExtensions() {
+    getExtensions(targetHost, targetPort) {
         return new Promise((resolve, reject) => {
             let returnExtensions = [];
             Object.keys(inFlight).map((extension) => {
                 returnExtensions.push(inFlight[extension]);
             });
-            this.restRequestSender.sendPost(this.getQueryRestOp())
+            this.restRequestSender.sendPost(this.getQueryRestOp(targetHost, targetPort))
                 .then((response) => {
                     let task = response.getBody();
                     if (task.hasOwnProperty('id')) {
                         this.logger.info('query extension task is:' + task.id);
-                        this.pollTaskUntilFinishedAndDelete(task.id, 10000)
+                        this.pollTaskUntilFinishedAndDelete(targetHost, targetPort, task.id, 10000)
                             .then((extensions) => {
                                 extensions.map((extension) => {
                                     const rpmFile = extension.packageName + '.rpm';
@@ -494,7 +466,7 @@ class TrustedExtensionsWorker {
     }
 
     /* jshint ignore:start */
-    getPackageName() {
+    getPackageName(targetHost, targetPort, rpmFile) {
         return new Promise((resolve, reject) => {
             try {
                 this.getExtensions(targetHost, targetPort)
@@ -529,12 +501,12 @@ class TrustedExtensionsWorker {
                         if (filename) {
                             if (Object.keys(inFlight).includes(inFlightIndex)) {
                                 returnExtension.state = 'UPLOADING';
-                                this.uploadToDevice(filename, targetHost, targetPort)
+                                this.uploadToDevice(targetHost, targetPort, filename)
                                     .then((uploaded) => {
                                         if (uploaded) {
                                             if (Object.keys(inFlight).includes(inFlightIndex)) {
                                                 returnExtension.state = 'INSTALLING';
-                                                this.installExtension()
+                                                this.installExtension(targetHost, targetPort, rpmFile)
                                                     .then((installed) => {
                                                         if (installed) {
                                                             if (Object.keys(inFlight).includes(inFlightIndex)) {
@@ -581,14 +553,14 @@ class TrustedExtensionsWorker {
     }
     /* jshint ignore:end */
 
-    installExtension() {
+    installExtension(targetHost, targetPort, rpmFile) {
         return new Promise((resolve, reject) => {
-            this.restRequestSender.sendPost(this.getInstallRestOp())
+            this.restRequestSender.sendPost(this.getInstallRestOp(targetHost, targetPort, rpmFile))
                 .then((response) => {
                     let task = response.getBody();
                     if (task.hasOwnProperty('id')) {
                         this.logger.info('installing extension task is: ' + task.id);
-                        this.pollTaskUntilFinishedAndDelete(task.id, 10000)
+                        this.pollTaskUntilFinishedAndDelete(targetHost, targetPort, task.id, 10000)
                             .then(() => {
                                 resolve(true);
                             })
@@ -606,14 +578,14 @@ class TrustedExtensionsWorker {
     }
 
     /* jshint ignore:start */
-    uninstallExtensionOnTarget() {
+    uninstallExtensionOnTarget(targetHost, targetPort, rpmFile) {
         return new Promise((resolve, reject) => {
             try {
                 this.logger.info('uninstalling extension ' + rpmFile);
-                this.getPackageName()
+                this.getPackageName(targetHost, targetPort, rpmFile)
                     .then((packageName) => {
                         if (packageName) {
-                            this.uninstallExtension(packageName)
+                            this.uninstallExtension(targetHost, targetPort, packageName)
                                 .then(() => {
                                     resolve(true);
                                 })
@@ -633,14 +605,14 @@ class TrustedExtensionsWorker {
     }
     /* jshint ignore:end */
 
-    uninstallExtension(packageName) {
+    uninstallExtension(targetHost, targetPort, packageName) {
         return new Promise((resolve, reject) => {
-            this.restRequestSender.sendPost(this.getUninstallRestOp(packageName))
+            this.restRequestSender.sendPost(this.getUninstallRestOp(targetHost, targetPort, packageName))
                 .then((response) => {
                     let task = response.getBody();
                     if (task.hasOwnProperty('id')) {
                         this.logger.info('uninstalling extension task is:' + task.id);
-                        this.pollTaskUntilFinishedAndDelete(task.id, 10000)
+                        this.pollTaskUntilFinishedAndDelete(targetHost, targetPort, task.id, 10000)
                             .then(() => {
                                 resolve(true);
                             })
@@ -657,7 +629,7 @@ class TrustedExtensionsWorker {
         });
     }
 
-    getQueryRestOp() {
+    getQueryRestOp(targetHost, targetPort) {
         let protocol = 'https';
         if (targetHost == 'localhost') {
             protocol = 'http';
@@ -677,7 +649,7 @@ class TrustedExtensionsWorker {
         return op;
     }
 
-    getUninstallRestOp(packageName) {
+    getUninstallRestOp(targetHost, targetPort, packageName) {
         let protocol = 'https';
         if (targetHost == 'localhost') {
             protocol = 'http';
@@ -697,7 +669,7 @@ class TrustedExtensionsWorker {
         return op;
     }
 
-    getInstallRestOp() {
+    getInstallRestOp(targetHost, targetPort, rpmFile) {
         let protocol = 'https';
         if (targetHost == 'localhost') {
             protocol = 'http';
@@ -717,7 +689,7 @@ class TrustedExtensionsWorker {
         return op;
     }
 
-    getTaskStatusRestOp(taskId) {
+    getTaskStatusRestOp(targetHost, targetPort, taskId) {
         let protocol = 'https';
         if (targetHost == 'localhost') {
             protocol = 'http';
@@ -735,7 +707,7 @@ class TrustedExtensionsWorker {
         return op;
     }
 
-    getDeleteTaskRestOp(taskId) {
+    getDeleteTaskRestOp(targetHost, targetPort, taskId) {
         let protocol = 'https';
         if (targetHost == 'localhost') {
             protocol = 'http';
@@ -753,23 +725,30 @@ class TrustedExtensionsWorker {
         return op;
     }
 
-    validateTarget() {
+    validateTarget(targetDevice) {
         return new Promise((resolve, reject) => {
-            if (targetHost == 'localhost') {
-                resolve(true);
+            if (!targetDevice) {
+                resolve({targetHost: 'localhost', targetPort: 8100});
+            }
+            if (targetDevice == 'localhost') {
+                resolve({targetHost: 'localhost', targetPort: 8100});
             }
             this.getDevices()
                 .then((devices) => {
                     devices.map((device) => {
-                        if (device.targetHost == targetHost && device.targetPort == targetPort) {
-                            resolve(true);
+                        if (device.targetHost == targetDevice || device.targetUUID == targetDevice) {
+                            resolve(device);
                         }
                     });
-                    reject(new Error('target ' + targetHost + ':' + targetPort + ' is not a trusted device.'));
+                    reject(new Error('target ' + targetDevice + ' is not a trusted device.'));
                 });
         });
     }
 
+    /**
+     * Request to get all trusted device groups
+     * @returns Promise when request completes
+     */
     getDeviceGroups() {
         return new Promise((resolve, reject) => {
             const deviceGroupsGetRequest = this.restOperationFactory.createRestOperationInstance()
@@ -780,18 +759,33 @@ class TrustedExtensionsWorker {
                 .then((response) => {
                     let respBody = response.getBody();
                     if (!respBody.hasOwnProperty('items')) {
-                        Promise.all([this.createDeviceGroup()])
-                            .then(() => {
-                                resolve([{
-                                    groupName: 'dockerContainers'
-                                }]);
+                        // we need to create a device group for our desired devices
+                        Promise.all([this.resolveDeviceGroup()])
+                            .then((deviceGroupName) => {
+                                resolve(deviceGroupName);
                             })
                             .catch(err => {
                                 this.logger.severe('could not create device group');
                                 reject(err);
                             });
                     }
-                    resolve(respBody.items);
+                    const returnDeviceGroups = [];
+                    respBody.items.map((deviceGroup) => {
+                        if (deviceGroup.groupName.startsWith(DEVICEGROUP_PREFIX)) {
+                            returnDeviceGroups.push(deviceGroup);
+                        }
+                    });
+                    if (!returnDeviceGroups) {
+                        this.createDeviceGroup(DEVICEGROUP_PREFIX + '0')
+                            .then((response) => {
+                                resolve([response.groupName]);
+                            })
+                            .catch((err) => {
+                                reject(err);
+                            });
+                    } else {
+                        resolve(returnDeviceGroups);
+                    }
                 })
                 .catch(err => {
                     this.logger.severe('could not get a list of device groups:' + err.message);
@@ -821,6 +815,7 @@ class TrustedExtensionsWorker {
                                         const returnDevice = {
                                             targetHost: device.address,
                                             targetPort: device.httpsPort,
+                                            targetUUID: device.machineId,
                                             state: device.state
                                         };
                                         devices.push(returnDevice);
@@ -848,14 +843,14 @@ class TrustedExtensionsWorker {
         });
     }
 
-    pollTaskUntilFinishedAndDelete(taskId, timeout) {
+    pollTaskUntilFinishedAndDelete(targetHost, targetPort, taskId, timeout) {
         return new Promise((resolve, reject) => {
             const start = new Date().getTime();
             let stop = start + timeout;
             let returnData = {};
 
             const poll = () => {
-                this.restRequestSender.sendGet(this.getTaskStatusRestOp(taskId))
+                this.restRequestSender.sendGet(this.getTaskStatusRestOp(targetHost, targetPort, taskId))
                     .then((response) => {
                         const queryBody = response.getBody();
                         if (queryBody.hasOwnProperty('status')) {
@@ -866,7 +861,7 @@ class TrustedExtensionsWorker {
                                 } else {
                                     returnData = queryBody;
                                 }
-                                this.restRequestSender.sendDelete(this.getDeleteTaskRestOp(taskId));
+                                this.restRequestSender.sendDelete(this.getDeleteTaskRestOp(targetHost, targetPort, taskId));
                                 resolve(returnData);
                             } else if (queryBody.status === FAILED) {
                                 reject(new Error('Task failed returning' + queryBody));
@@ -970,7 +965,7 @@ class TrustedExtensionsWorker {
         });
     }
 
-    uploadToDevice(rpmFile, targetHost, targetPort) {
+    uploadToDevice(targetHost, targetPort, rpmFile) {
         return new Promise((resolve, reject) => {
             const filePath = `${downloadDirectory}/${rpmFile}`;
             const fstats = fs.statSync(filePath);
