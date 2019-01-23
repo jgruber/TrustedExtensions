@@ -14,6 +14,8 @@ const UNDISCOVERED = 'UNDISCOVERED';
 const VALIDDOWNLOADPROTOCOLS = ['file:', 'http:', 'https:'];
 const DEVICEGROUP_PREFIX = 'TrustProxy_';
 
+const TASKTIMEOUT = 120000;
+
 const downloadDirectory = '/var/tmp';
 const deviceGroupsUrl = 'http://localhost:8100/mgmt/shared/resolver/device-groups';
 const localauth = 'Basic ' + new Buffer('admin:').toString('base64');
@@ -845,6 +847,9 @@ class TrustedExtensionsWorker {
 
     pollTaskUntilFinishedAndDelete(targetHost, targetPort, taskId, timeout) {
         return new Promise((resolve, reject) => {
+            if (!timeout) {
+                timeout = TASKTIMEOUT;
+            }
             const start = new Date().getTime();
             let stop = start + timeout;
             let returnData = {};
