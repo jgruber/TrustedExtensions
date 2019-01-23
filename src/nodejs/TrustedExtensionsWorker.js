@@ -163,51 +163,51 @@ class TrustedExtensionsWorker {
                     err.httpStatusCode = 500;
                     restOperation.fail(err);
                 } else {
-                this.getPackageName(target.targetHost, target.targetPort, rpmFile)
-                    .then((packageName) => {
-                        if (packageName) {
-                            const err = new Error(`package with rpmFile ${rpmFile} is already installed on target ${target.targetHost}:${target.targetPort}`);
-                            err.httpStatusCode = 409;
-                            restOperation.fail(err);
-                        } else {
-                            let returnExtension = {
-                                rpmFile: rpmFile,
-                                downloadUrl: downloadUrl,
-                                state: "REQUESTED",
-                                name: "",
-                                version: "",
-                                release: "",
-                                arch: "",
-                                packageName: "",
-                                tags: []
-                            };
-                            inFlight[inFlightIndex] = returnExtension;
-                            this.installExtensionToTarget(target.targetHost, target.targetPort, downloadUrl, rpmFile)
-                                .then((success) => {
-                                    if (success) {
-                                        delete inFlight[inFlightIndex];
-                                    } else {
-                                        const err = new Error(`package with rpmFile ${rpmFile} was not installed on target ${target.targetHost}:${target.targetPort}`);
+                    this.getPackageName(target.targetHost, target.targetPort, rpmFile)
+                        .then((packageName) => {
+                            if (packageName) {
+                                const err = new Error(`package with rpmFile ${rpmFile} is already installed on target ${target.targetHost}:${target.targetPort}`);
+                                err.httpStatusCode = 409;
+                                restOperation.fail(err);
+                            } else {
+                                let returnExtension = {
+                                    rpmFile: rpmFile,
+                                    downloadUrl: downloadUrl,
+                                    state: "REQUESTED",
+                                    name: "",
+                                    version: "",
+                                    release: "",
+                                    arch: "",
+                                    packageName: "",
+                                    tags: []
+                                };
+                                inFlight[inFlightIndex] = returnExtension;
+                                this.installExtensionToTarget(target.targetHost, target.targetPort, downloadUrl, rpmFile)
+                                    .then((success) => {
+                                        if (success) {
+                                            delete inFlight[inFlightIndex];
+                                        } else {
+                                            const err = new Error(`package with rpmFile ${rpmFile} was not installed on target ${target.targetHost}:${target.targetPort}`);
+                                            returnExtension = inFlight[inFlightIndex];
+                                            returnExtension.state = 'ERROR';
+                                            returnExtension.tags.push('err: ' + err.message);
+                                        }
+                                    })
+                                    .catch((err) => {
                                         returnExtension = inFlight[inFlightIndex];
                                         returnExtension.state = 'ERROR';
                                         returnExtension.tags.push('err: ' + err.message);
-                                    }
-                                })
-                                .catch((err) => {
-                                    returnExtension = inFlight[inFlightIndex];
-                                    returnExtension.state = 'ERROR';
-                                    returnExtension.tags.push('err: ' + err.message);
-                                });
-                            restOperation.statusCode = 202;
-                            restOperation.setContentType('application/json');
-                            restOperation.body = returnExtension;
-                            this.completeRestOperation(restOperation);
-                        }
-                    })
-                    .catch((err) => {
-                        err.httpStatusCode = 400;
-                        restOperation.fail(err);
-                    });
+                                    });
+                                restOperation.statusCode = 202;
+                                restOperation.setContentType('application/json');
+                                restOperation.body = returnExtension;
+                                this.completeRestOperation(restOperation);
+                            }
+                        })
+                        .catch((err) => {
+                            err.httpStatusCode = 400;
+                            restOperation.fail(err);
+                        });
                 }
             })
             .catch((err) => {
@@ -730,10 +730,16 @@ class TrustedExtensionsWorker {
     validateTarget(targetDevice) {
         return new Promise((resolve, reject) => {
             if (!targetDevice) {
-                resolve({targetHost: 'localhost', targetPort: 8100});
+                resolve({
+                    targetHost: 'localhost',
+                    targetPort: 8100
+                });
             }
             if (targetDevice == 'localhost') {
-                resolve({targetHost: 'localhost', targetPort: 8100});
+                resolve({
+                    targetHost: 'localhost',
+                    targetPort: 8100
+                });
             }
             this.getDevices()
                 .then((devices) => {
@@ -916,6 +922,48 @@ class TrustedExtensionsWorker {
                         } catch (err) {
                             reject(err);
                         }
+                    } else if (parsedUrl.protocol == 'http:') {
+                        this.logger.info('downloading ' + sourceUrl);
+                        let fws = fs.createWriteStream(filePath);
+                        let request = http.get(sourceUrl, (response) => {
+                                if (response.statusCode > 300 && response.statusCode < 400 && response.headers.location) {
+                                    fs.unlinkSync(filePath);
+                                    const redirectUrlParsed = url.parse(response.headers.location);
+                                    let redirectUrl = parsedUrl.host + response.headers.location;
+                                    if (redirectUrlParsed.hostname) {
+                                        redirectUrl = response.headers.location;
+                                    }
+                                    this.logger.info('following download redirect to:' + redirectUrl);
+                                    fws = fs.createWriteStream(filePath);
+                                    request = https.get(redirectUrl, (response) => {
+                                            this.logger.info('redirect has status: ' + response.statusCode + ' body:' + JSON.stringify(response.headers));
+                                            response.pipe(fws);
+                                            fws.on('finish', () => {
+                                                fws.close();
+                                                resolve(policyFile);
+                                            });
+                                        })
+                                        .on('error', (err) => {
+                                            this.logger.severe('error downloading url ' + redirectUrl + ' - ' + err.message);
+                                            fws.close();
+                                            fs.unlinkSync(filePath);
+                                            resolve(false);
+                                        });
+                                } else {
+                                    response.pipe(fws);
+                                    fws.on('finish', () => {
+                                        fws.close();
+                                        resolve(policyFile);
+                                    });
+                                }
+                            })
+                            .on('error', (err) => {
+                                this.logger.severe('error downloading url ' + sourceUrl + ' - ' + err.message);
+                                fws.close();
+                                fs.unlinkSync(filePath);
+                                resolve(false);
+                            });
+                        request.end();
                     } else {
                         this.logger.info('downloading ' + instanceUrl);
                         process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = 0; // jshint ignore:line
