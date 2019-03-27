@@ -923,9 +923,9 @@ class TrustedExtensionsWorker {
                             reject(err);
                         }
                     } else if (parsedUrl.protocol == 'http:') {
-                        this.logger.info('downloading ' + parsedUrl.href);
+                        this.logger.info('downloading ' + instanceUrl);
                         let fws = fs.createWriteStream(filePath);
-                        let request = http.get(parsedUrl.href, (response) => {
+                        let request = http.get(instanceUrl, (response) => {
                                 if (response.statusCode > 300 && response.statusCode < 400 && response.headers.location) {
                                     fs.unlinkSync(filePath);
                                     const redirectUrlParsed = url.parse(response.headers.location);
@@ -940,7 +940,7 @@ class TrustedExtensionsWorker {
                                             response.pipe(fws);
                                             fws.on('finish', () => {
                                                 fws.close();
-                                                resolve(response);
+                                                resolve(rpmFile);
                                             });
                                         })
                                         .on('error', (err) => {
@@ -953,7 +953,7 @@ class TrustedExtensionsWorker {
                                     response.pipe(fws);
                                     fws.on('finish', () => {
                                         fws.close();
-                                        resolve(response);
+                                        resolve(rpmFile);
                                     });
                                 }
                             })
