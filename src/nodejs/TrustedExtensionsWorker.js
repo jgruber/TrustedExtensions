@@ -923,9 +923,9 @@ class TrustedExtensionsWorker {
                             reject(err);
                         }
                     } else if (parsedUrl.protocol == 'http:') {
-                        this.logger.info('downloading ' + sourceUrl);
+                        this.logger.info('downloading ' + parsedUrl.href);
                         let fws = fs.createWriteStream(filePath);
-                        let request = http.get(sourceUrl, (response) => {
+                        let request = http.get(parsedUrl.href, (response) => {
                                 if (response.statusCode > 300 && response.statusCode < 400 && response.headers.location) {
                                     fs.unlinkSync(filePath);
                                     const redirectUrlParsed = url.parse(response.headers.location);
@@ -940,7 +940,7 @@ class TrustedExtensionsWorker {
                                             response.pipe(fws);
                                             fws.on('finish', () => {
                                                 fws.close();
-                                                resolve(policyFile);
+                                                resolve(response);
                                             });
                                         })
                                         .on('error', (err) => {
@@ -953,12 +953,12 @@ class TrustedExtensionsWorker {
                                     response.pipe(fws);
                                     fws.on('finish', () => {
                                         fws.close();
-                                        resolve(policyFile);
+                                        resolve(response);
                                     });
                                 }
                             })
                             .on('error', (err) => {
-                                this.logger.severe('error downloading url ' + sourceUrl + ' - ' + err.message);
+                                this.logger.severe('error downloading url ' + parsedUrl.href + ' - ' + err.message);
                                 fws.close();
                                 fs.unlinkSync(filePath);
                                 resolve(false);

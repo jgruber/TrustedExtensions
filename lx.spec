@@ -1,7 +1,7 @@
 Summary: TrustedExtensions for the Application Services Gateway
 Name: TrustedExtensions
 Version: 1.0.1
-Release: 0001
+Release: 0003
 BuildArch: noarch
 Group: Development/Libraries
 License: Apache-2.0
