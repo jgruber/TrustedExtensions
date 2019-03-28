@@ -20,6 +20,8 @@ const downloadDirectory = '/var/tmp';
 const deviceGroupsUrl = 'http://localhost:8100/mgmt/shared/resolver/device-groups';
 const localauth = 'Basic ' + new Buffer('admin:').toString('base64');
 
+const LOGGINGPREFIX = '[TrustedExtensions] ';
+
 let inFlight = {};
 
 // polyfill old node to include [].includes
@@ -442,7 +444,7 @@ class TrustedExtensionsWorker {
                 .then((response) => {
                     let task = response.getBody();
                     if (task.hasOwnProperty('id')) {
-                        this.logger.info('query extension task is:' + task.id);
+                        this.logger.info(LOGGINGPREFIX + 'query extension task is:' + task.id);
                         this.pollTaskUntilFinishedAndDelete(targetHost, targetPort, task.id, 10000)
                             .then((extensions) => {
                                 extensions.map((extension) => {
@@ -493,7 +495,7 @@ class TrustedExtensionsWorker {
     /* jshint ignore:start */
     installExtensionToTarget(targetHost, targetPort, downloadUrl, rpmFile) {
         return new Promise((resolve, reject) => {
-            this.logger.info('installing extension ' + rpmFile);
+            this.logger.info(LOGGINGPREFIX + 'installing extension ' + rpmFile);
             const inFlightIndex = `${targetHost}:${targetPort}:${rpmFile}`;
             let returnExtension = inFlight[inFlightIndex]
             returnExtension.state = 'DOWNLOADING';
@@ -561,7 +563,7 @@ class TrustedExtensionsWorker {
                 .then((response) => {
                     let task = response.getBody();
                     if (task.hasOwnProperty('id')) {
-                        this.logger.info('installing extension task is: ' + task.id);
+                        this.logger.info(LOGGINGPREFIX + 'installing extension task is: ' + task.id);
                         this.pollTaskUntilFinishedAndDelete(targetHost, targetPort, task.id, 10000)
                             .then(() => {
                                 resolve(true);
@@ -583,7 +585,7 @@ class TrustedExtensionsWorker {
     uninstallExtensionOnTarget(targetHost, targetPort, rpmFile) {
         return new Promise((resolve, reject) => {
             try {
-                this.logger.info('uninstalling extension ' + rpmFile);
+                this.logger.info(LOGGINGPREFIX + 'uninstalling extension ' + rpmFile);
                 this.getPackageName(targetHost, targetPort, rpmFile)
                     .then((packageName) => {
                         if (packageName) {
@@ -613,7 +615,7 @@ class TrustedExtensionsWorker {
                 .then((response) => {
                     let task = response.getBody();
                     if (task.hasOwnProperty('id')) {
-                        this.logger.info('uninstalling extension task is:' + task.id);
+                        this.logger.info(LOGGINGPREFIX + 'uninstalling extension task is:' + task.id);
                         this.pollTaskUntilFinishedAndDelete(targetHost, targetPort, task.id, 10000)
                             .then(() => {
                                 resolve(true);
@@ -773,7 +775,7 @@ class TrustedExtensionsWorker {
                                 resolve(deviceGroupName);
                             })
                             .catch(err => {
-                                this.logger.severe('could not create device group');
+                                this.logger.severe(LOGGINGPREFIX + 'could not create device group');
                                 reject(err);
                             });
                     }
@@ -796,7 +798,7 @@ class TrustedExtensionsWorker {
                     }
                 })
                 .catch(err => {
-                    this.logger.severe('could not get a list of device groups:' + err.message);
+                    this.logger.severe(LOGGINGPREFIX + 'could not get a list of device groups:' + err.message);
                     reject(err);
                 });
         });
@@ -831,7 +833,7 @@ class TrustedExtensionsWorker {
                                 });
                             })
                             .catch((err) => {
-                                this.logger.severe('Error getting devices from device group:' + err.message);
+                                this.logger.severe(LOGGINGPREFIX + 'Error getting devices from device group:' + err.message);
                                 reject(err);
                             });
                         devicesPromises.push(devicesGetPromise);
@@ -845,7 +847,7 @@ class TrustedExtensionsWorker {
                         });
                 })
                 .catch((err) => {
-                    this.logger.severe('Error getting device groups:' + err.message);
+                    this.logger.severe(LOGGINGPREFIX + 'Error getting device groups:' + err.message);
                     throw err;
                 });
         });
@@ -865,7 +867,7 @@ class TrustedExtensionsWorker {
                     .then((response) => {
                         const queryBody = response.getBody();
                         if (queryBody.hasOwnProperty('status')) {
-                            this.logger.info('extension tasks ' + taskId + ' returned status: ' + queryBody.status);
+                            this.logger.info(LOGGINGPREFIX + 'extension tasks ' + taskId + ' returned status: ' + queryBody.status);
                             if (queryBody.status === FINISHED) {
                                 if (queryBody.hasOwnProperty('queryResponse')) {
                                     returnData = queryBody.queryResponse;
@@ -900,7 +902,7 @@ class TrustedExtensionsWorker {
     downloadFileToGateway(rpmFile, instanceUrl) {
         return new Promise((resolve, reject) => {
             try {
-                this.logger.info('downloading rpmFile:' + rpmFile + ' url:' + instanceUrl);
+                this.logger.info(LOGGINGPREFIX + 'downloading rpmFile:' + rpmFile + ' url:' + instanceUrl);
                 if (!instanceUrl) {
                     resolve(false);
                 }
@@ -910,7 +912,7 @@ class TrustedExtensionsWorker {
                 const filePath = `${downloadDirectory}/${rpmFile}`;
                 if (fs.existsSync()) {
                     const fstats = fs.statSync(filePath);
-                    this.logger.info('file ' + rpmFile + '(' + fstats.size + ' bytes) was deleted');
+                    this.logger.info(LOGGINGPREFIX + 'file ' + rpmFile + '(' + fstats.size + ' bytes) was deleted');
                     fs.unlinkSync(filePath);
                 }
                 const parsedUrl = url.parse(instanceUrl);
@@ -923,7 +925,7 @@ class TrustedExtensionsWorker {
                             reject(err);
                         }
                     } else if (parsedUrl.protocol == 'http:') {
-                        this.logger.info('downloading ' + instanceUrl);
+                        this.logger.info(LOGGINGPREFIX + 'downloading ' + instanceUrl);
                         let fws = fs.createWriteStream(filePath);
                         let request = http.get(instanceUrl, (response) => {
                                 if (response.statusCode > 300 && response.statusCode < 400 && response.headers.location) {
@@ -933,10 +935,10 @@ class TrustedExtensionsWorker {
                                     if (redirectUrlParsed.hostname) {
                                         redirectUrl = response.headers.location;
                                     }
-                                    this.logger.info('following download redirect to:' + redirectUrl);
+                                    this.logger.info(LOGGINGPREFIX + 'following download redirect to:' + redirectUrl);
                                     fws = fs.createWriteStream(filePath);
                                     request = https.get(redirectUrl, (response) => {
-                                            this.logger.info('redirect has status: ' + response.statusCode + ' body:' + JSON.stringify(response.headers));
+                                            this.logger.info(LOGGINGPREFIX + 'redirect has status: ' + response.statusCode + ' body:' + JSON.stringify(response.headers));
                                             response.pipe(fws);
                                             fws.on('finish', () => {
                                                 fws.close();
@@ -944,7 +946,7 @@ class TrustedExtensionsWorker {
                                             });
                                         })
                                         .on('error', (err) => {
-                                            this.logger.severe('error downloading url ' + redirectUrl + ' - ' + err.message);
+                                            this.logger.severe(LOGGINGPREFIX + 'error downloading url ' + redirectUrl + ' - ' + err.message);
                                             fws.close();
                                             fs.unlinkSync(filePath);
                                             resolve(false);
@@ -958,14 +960,14 @@ class TrustedExtensionsWorker {
                                 }
                             })
                             .on('error', (err) => {
-                                this.logger.severe('error downloading url ' + parsedUrl.href + ' - ' + err.message);
+                                this.logger.severe(LOGGINGPREFIX + 'error downloading url ' + parsedUrl.href + ' - ' + err.message);
                                 fws.close();
                                 fs.unlinkSync(filePath);
                                 resolve(false);
                             });
                         request.end();
                     } else {
-                        this.logger.info('downloading ' + instanceUrl);
+                        this.logger.info(LOGGINGPREFIX + 'downloading ' + instanceUrl);
                         process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = 0; // jshint ignore:line
                         var fws = fs.createWriteStream(filePath);
                         var request = https.get(instanceUrl, (response) => {
@@ -976,10 +978,10 @@ class TrustedExtensionsWorker {
                                     if (redirectUrlParsed.hostname) {
                                         redirectUrl = response.headers.location;
                                     }
-                                    this.logger.info('following download redirect to:' + redirectUrl);
+                                    this.logger.info(LOGGINGPREFIX + 'following download redirect to:' + redirectUrl);
                                     fws = fs.createWriteStream(filePath);
                                     request = https.get(redirectUrl, (response) => {
-                                            this.logger.info('redirect has status: ' + response.statusCode + ' body:' + JSON.stringify(response.headers));
+                                            this.logger.info(LOGGINGPREFIX + 'redirect has status: ' + response.statusCode + ' body:' + JSON.stringify(response.headers));
                                             response.pipe(fws);
                                             fws.on('finish', () => {
                                                 fws.close();
@@ -987,7 +989,7 @@ class TrustedExtensionsWorker {
                                             });
                                         })
                                         .on('error', (err) => {
-                                            this.logger.severe('error downloading url ' + redirectUrl + ' - ' + err.message);
+                                            this.logger.severe(LOGGINGPREFIX + 'error downloading url ' + redirectUrl + ' - ' + err.message);
                                             fws.close();
                                             fs.unlinkSync(filePath);
                                             resolve(false);
@@ -1001,7 +1003,7 @@ class TrustedExtensionsWorker {
                                 }
                             })
                             .on('error', (err) => {
-                                this.logger.severe('error downloading url ' + instanceUrl + ' - ' + err.message);
+                                this.logger.severe(LOGGINGPREFIX + 'error downloading url ' + instanceUrl + ' - ' + err.message);
                                 fws.close();
                                 fs.unlinkSync(filePath);
                                 resolve(false);
@@ -1051,7 +1053,7 @@ class TrustedExtensionsWorker {
                             postOptions.path = `/mgmt/shared/file-transfer/uploads/${rpmFile}?${token.queryParam}`;
                         }
                         postOptions.headers = headers;
-                        this.logger.info('uploading ' + rpmFile + ' to ' + targetHost + ':' + targetPort + ' ' + start + '-' + end + '/' + fstats.size);
+                        this.logger.info(LOGGINGPREFIX + 'uploading ' + rpmFile + ' to ' + targetHost + ':' + targetPort + ' ' + start + '-' + end + '/' + fstats.size);
                         const req = httplib.request(postOptions, (res) => {
                             if (res.statusCode > 399) {
                                 const err = new Error('upload part start: ' + start + ' end:' + end + ' return status: ' + res.statusCode);
@@ -1122,7 +1124,7 @@ class TrustedExtensionsWorker {
                         resolve(body);
                     });
                     res.on('error', (err) => {
-                        this.logger.severe('error: ' + err);
+                        this.logger.severe(LOGGINGPREFIX + 'error: ' + err);
                         resolve(null);
                     });
                 });
